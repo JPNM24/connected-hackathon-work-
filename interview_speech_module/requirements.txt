@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+vosk
+librosa
+numpy
+scipy
+praat-parselmouth
+soundfile
