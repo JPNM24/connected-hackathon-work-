@@ -1,64 +1,56 @@
 import subprocess
+import json
 import librosa
 import numpy as np
 import parselmouth
-import wave
-import json
 from vosk import Model, KaldiRecognizer
+import wave
 
-MODEL = Model("vosk-model-small-en-us-0.15")
+model = Model("vosk-model-small-en-us-0.15")
 
-FILLERS = {"uh", "um", "ah", "er", "hmm"}
+def convert_to_wav(input_path):
+    output_path = input_path.replace(".webm", ".wav")
+    command = ["ffmpeg", "-y", "-i", input_path, "-ar", "16000", "-ac", "1", output_path]
+    subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return output_path
 
-def webm_to_wav(webm_path):
-    wav_path = webm_path.replace(".webm", ".wav")
-    subprocess.run(
-        ["ffmpeg", "-y", "-i", webm_path, "-ar", "16000", "-ac", "1", wav_path],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL
-    )
-    return wav_path
+def transcribe_vosk(wav_path):
+    wf = wave.open(wav_path, "rb")
+    rec = KaldiRecognizer(model, wf.getframerate())
+    rec.SetWords(True)
 
-def transcribe_stream(chunk_bytes, recognizer):
-    if recognizer.AcceptWaveform(chunk_bytes):
-        return json.loads(recognizer.Result()), True
-    else:
-        return json.loads(recognizer.PartialResult()), False
+    results=[]
+    while True:
+        data = wf.readframes(4000)
+        if len(data)==0:
+            break
+        if rec.AcceptWaveform(data):
+            results.append(json.loads(rec.Result()))
+    results.append(json.loads(rec.FinalResult()))
 
-def clean_transcript(text):
-    return " ".join(w for w in text.split() if w.lower() not in FILLERS)
+    text = " ".join(r.get("text","") for r in results)
+    words=[]
+    for r in results:
+        if "result" in r:
+            words.extend(r["result"])
+    return text, words
 
-def analyze_audio(wav_path):
-    y, sr = librosa.load(wav_path, sr=16000)
+def analyze_energy(y):
+    rms = librosa.feature.rms(y=y)[0]
+    return float(np.mean(rms))
 
-    duration = librosa.get_duration(y=y, sr=sr)
-    rms = np.mean(librosa.feature.rms(y=y))
-
+def analyze_pauses(y, sr):
     intervals = librosa.effects.split(y, top_db=25)
-    speech_time = sum((e - s) / sr for s, e in intervals)
-    pause_time = max(duration - speech_time, 0)
+    silence = len(y)/sr
+    speech = sum((end-start)/sr for start,end in intervals)
+    return max(silence - speech, 0)
 
+def analyze_pitch(wav_path):
     snd = parselmouth.Sound(wav_path)
     pitch = snd.to_pitch()
-    vals = pitch.selected_array["frequency"]
-    vals = vals[vals > 0]
+    values = pitch.selected_array['frequency']
+    values = values[values>0]
+    return float(np.mean(values)), float(np.std(values)/np.mean(values))
 
-    pitch_mean = float(np.mean(vals)) if len(vals) else 0
-    pitch_var = float(np.std(vals) / np.mean(vals)) if len(vals) else 0
-
-    return {
-        "duration": duration,
-        "energy": rms,
-        "pause_ratio": pause_time / duration if duration else 0,
-        "pitch_mean": pitch_mean,
-        "pitch_variation": pitch_var
-    }
-
-def confidence_score(wpm, filler_rate, pause_ratio, pitch_var):
-    score = (
-        0.35 * min(wpm / 160, 1) +
-        0.25 * (1 - filler_rate) +
-        0.2 * (1 - pause_ratio) +
-        0.2 * (1 - pitch_var)
-    )
-    return round(max(min(score, 1), 0), 2)
+def confidence_score(wpm, pause_ratio, pitch_var, energy):
+    return round(max(min(0.4*(wpm/160)+0.3*energy-0.2*pause_ratio-0.1*pitch_var,1),0),2)

@@ -6,3 +6,4 @@ numpy
 scipy
 praat-parselmouth
 soundfile
+websockets

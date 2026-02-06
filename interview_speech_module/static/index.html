@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Live Speech Confidence Analyzer</title>
+    <style>
+        body {
+            font-family: Arial;
+            margin: 40px;
+        }
+
+        #live {
+            font-size: 22px;
+            color: #ff9800;
+        }
+
+        #final {
+            font-size: 18px;
+            color: #4caf50;
+        }
+
+        pre {
+            background: #111;
+            color: #0f0;
+            padding: 10px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <h2>🎤 Live Raw Speech Analyzer</h2>
+
+    <button onclick="start()">Start</button>
+    <button onclick="stop()">Stop</button>
+
+    <h3>Live Caption</h3>
+    <p id="live">—</p>
+
+    <h3>Final Transcript</h3>
+    <p id="final">—</p>
+
+    <h3>Live Analysis</h3>
+    <pre id="metrics">—</pre>
+
+    <script>
+        let socket, audioCtx, stream, workletNode;
+        let finalText = "";
+
+        async function start() {
+            socket = new WebSocket("ws://localhost:8000/ws/live");
+            socket.binaryType = "arraybuffer";
+
+            socket.onmessage = e => {
+                const data = JSON.parse(e.data);
+                if (data.partial) live.innerText = data.partial;
+                if (data.final) {
+                    finalText += data.final + " ";
+                    final.innerText = finalText;
+                }
+                if (data.metrics) {
+                    metrics.textContent = JSON.stringify(data.metrics, null, 2);
+                }
+            };
+
+            stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            audioCtx = new AudioContext({ sampleRate: 16000 });
+
+            await audioCtx.audioWorklet.addModule("/static/audio-worklet.js");
+
+            const source = audioCtx.createMediaStreamSource(stream);
+            workletNode = new AudioWorkletNode(audioCtx, "pcm-processor");
+
+            workletNode.port.onmessage = e => {
+                if (socket.readyState === 1) socket.send(e.data);
+            };
+
+            source.connect(workletNode);
+        }
+
+        function stop() {
+            stream.getTracks().forEach(t => t.stop());
+            socket.close();
+        }
+    </script>
+
+</body>
+
+</html>

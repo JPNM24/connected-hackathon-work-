@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Microphone Test</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #1a1a2e;
+            color: #eee;
+        }
+
+        h1 {
+            color: #8b5cf6;
+        }
+
+        .device-card {
+            background: #16213e;
+            border: 1px solid #0f3460;
+            border-radius: 12px;
+            padding: 20px;
+            margin: 15px 0;
+        }
+
+        .device-card.active {
+            border-color: #8b5cf6;
+        }
+
+        .device-name {
+            font-weight: bold;
+            font-size: 1.1em;
+        }
+
+        .device-id {
+            color: #888;
+            font-size: 0.8em;
+            word-break: break-all;
+        }
+
+        .meter-container {
+            background: #0f3460;
+            height: 20px;
+            border-radius: 10px;
+            margin: 10px 0;
+            overflow: hidden;
+        }
+
+        .meter-bar {
+            height: 100%;
+            background: linear-gradient(90deg, #10b981, #8b5cf6, #ef4444);
+            width: 0%;
+            transition: width 0.1s;
+        }
+
+        .status {
+            margin: 10px 0;
+        }
+
+        .status-good {
+            color: #10b981;
+        }
+
+        .status-bad {
+            color: #ef4444;
+        }
+
+        .status-warning {
+            color: #f59e0b;
+        }
+
+        button {
+            background: #8b5cf6;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            margin: 5px;
+        }
+
+        button:hover {
+            background: #7c3aed;
+        }
+
+        button:disabled {
+            background: #555;
+            cursor: not-allowed;
+        }
+
+        .instructions {
+            background: #1e3a5f;
+            border-left: 4px solid #3b82f6;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 0 8px 8px 0;
+        }
+
+        #log {
+            background: #0a0a15;
+            padding: 15px;
+            border-radius: 8px;
+            font-family: monospace;
+            font-size: 12px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>🎤 Microphone Test Utility</h1>
+
+    <div class="instructions">
+        <strong>Instructions:</strong>
+        <ol>
+            <li>Click "Scan Microphones" to find all audio input devices</li>
+            <li>Click "Test" on each device to see if it captures audio</li>
+            <li>Speak into your microphone - the level meter should move</li>
+            <li>If all shows "muted: true", check Windows Settings → Privacy → Microphone</li>
+        </ol>
+    </div>
+
+    <button id="scanBtn" onclick="scanDevices()">🔍 Scan Microphones</button>
+    <button id="stopBtn" onclick="stopAll()" disabled>⏹️ Stop All</button>
+
+    <div id="devices"></div>
+
+    <h3>Log</h3>
+    <div id="log"></div>
+
+    <script>
+        let activeStream = null;
+        let activeContext = null;
+        let activeAnalyser = null;
+        let animationId = null;
+
+        function log(msg) {
+            const logEl = document.getElementById('log');
+            const time = new Date().toLocaleTimeString();
+            logEl.innerHTML = `[${time}] ${msg}<br>` + logEl.innerHTML;
+            console.log(msg);
+        }
+
+        async function scanDevices() {
+            log('Scanning for audio devices...');
+            const devicesEl = document.getElementById('devices');
+            devicesEl.innerHTML = '<p>Scanning...</p>';
+
+            try {
+                // First request permission
+                await navigator.mediaDevices.getUserMedia({ audio: true });
+                log('Microphone permission granted');
+
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const audioInputs = devices.filter(d => d.kind === 'audioinput');
+
+                log(`Found ${audioInputs.length} audio input devices`);
+
+                if (audioInputs.length === 0) {
+                    devicesEl.innerHTML = '<p class="status-bad">No microphones found!</p>';
+                    return;
+                }
+
+                devicesEl.innerHTML = audioInputs.map((device, i) => `
+                    <div class="device-card" id="device-${i}">
+                        <div class="device-name">${device.label || 'Unknown Device'}</div>
+                        <div class="device-id">ID: ${device.deviceId.substring(0, 50)}...</div>
+                        <div class="status" id="status-${i}">Status: Not tested</div>
+                        <div class="meter-container">
+                            <div class="meter-bar" id="meter-${i}"></div>
+                        </div>
+                        <button onclick="testDevice('${device.deviceId}', ${i})">🎙️ Test This Mic</button>
+                    </div>
+                `).join('');
+
+            } catch (err) {
+                log('Error: ' + err.message);
+                devicesEl.innerHTML = `<p class="status-bad">Error: ${err.message}</p>`;
+            }
+        }
+
+        async function testDevice(deviceId, index) {
+            stopAll();
+
+            const statusEl = document.getElementById(`status-${index}`);
+            const meterEl = document.getElementById(`meter-${index}`);
+            const cardEl = document.getElementById(`device-${index}`);
+
+            log(`Testing device ${index}: ${deviceId.substring(0, 20)}...`);
+            statusEl.innerHTML = 'Status: <span class="status-warning">Connecting...</span>';
+
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        deviceId: { exact: deviceId },
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true
+                    }
+                });
+
+                activeStream = stream;
+                const track = stream.getAudioTracks()[0];
+
+                log(`Track: enabled=${track.enabled}, muted=${track.muted}, readyState=${track.readyState}`);
+
+                let statusText = `Track: enabled=${track.enabled}, muted=${track.muted}`;
+                let statusClass = track.muted ? 'status-bad' : 'status-good';
+
+                if (track.muted) {
+                    statusText += ' ⚠️ HARDWARE MUTED!';
+                }
+
+                statusEl.innerHTML = `Status: <span class="${statusClass}">${statusText}</span>`;
+
+                // Set up audio analysis
+                const audioContext = new AudioContext();
+                await audioContext.resume();
+                activeContext = audioContext;
+
+                const source = audioContext.createMediaStreamSource(stream);
+                const analyser = audioContext.createAnalyser();
+                analyser.fftSize = 256;
+                source.connect(analyser);
+                activeAnalyser = analyser;
+
+                cardEl.classList.add('active');
+                document.getElementById('stopBtn').disabled = false;
+
+                // Animate meter
+                const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+                function updateMeter() {
+                    analyser.getByteFrequencyData(dataArray);
+                    const avg = dataArray.reduce((a, b) => a + b, 0) / dataArray.length;
+                    const percent = Math.min(100, (avg / 128) * 100);
+                    meterEl.style.width = percent + '%';
+
+                    if (percent > 5) {
+                        statusEl.innerHTML = `Status: <span class="status-good">✅ AUDIO DETECTED! Level: ${percent.toFixed(0)}%</span>`;
+                    }
+
+                    animationId = requestAnimationFrame(updateMeter);
+                }
+                updateMeter();
+
+            } catch (err) {
+                log('Error testing device: ' + err.message);
+                statusEl.innerHTML = `Status: <span class="status-bad">Error: ${err.message}</span>`;
+            }
+        }
+
+        function stopAll() {
+            if (animationId) {
+                cancelAnimationFrame(animationId);
+                animationId = null;
+            }
+            if (activeStream) {
+                activeStream.getTracks().forEach(t => t.stop());
+                activeStream = null;
+            }
+            if (activeContext) {
+                activeContext.close();
+                activeContext = null;
+            }
+            document.querySelectorAll('.device-card').forEach(c => c.classList.remove('active'));
+            document.querySelectorAll('.meter-bar').forEach(m => m.style.width = '0%');
+            document.getElementById('stopBtn').disabled = true;
+            log('Stopped all audio capture');
+        }
+
+        // Auto-scan on load
+        window.onload = () => {
+            log('Microphone Test Utility loaded');
+            log('Click "Scan Microphones" to begin');
+        };
+    </script>
+</body>
+
+</html>

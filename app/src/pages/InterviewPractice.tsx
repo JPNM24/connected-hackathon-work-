@@ -138,7 +138,8 @@ export function InterviewPractice() {
     liveText,
     finalText,
     isRecording: isListening,
-    setFinalText
+    setFinalText,
+    audioLevel
   } = useVoice(sessionId, `q${currentQuestion}`);
 
   // Initialize Non-Verbal hook
@@ -229,16 +230,10 @@ export function InterviewPractice() {
     const newMicState = !isMicOn;
     setIsMicOn(newMicState);
 
-    // Update stream audio tracks
-    if (streamRef.current) {
-      streamRef.current.getAudioTracks().forEach(track => {
-        track.enabled = newMicState;
-      });
-    }
-
     if (newMicState) {
-      // Pass the camera stream to useVoice so it uses the same audio source
-      startVoice(streamRef.current);
+      // useVoice now creates its own dedicated audio stream
+      // This avoids conflicts with the video element's shared stream
+      startVoice();
     } else {
       stopVoice();
     }
@@ -382,9 +377,16 @@ export function InterviewPractice() {
 
               {/* Recording Indicator */}
               {isListening && (
-                <div className="absolute top-4 left-4 flex items-center gap-2 px-3 py-1.5 bg-red-500/90 rounded-full">
+                <div className="absolute top-4 left-4 flex items-center gap-3 px-3 py-1.5 bg-red-500/90 rounded-full">
                   <span className="w-2 h-2 bg-white rounded-full animate-pulse" />
                   <span className="text-xs text-white font-medium">Recording</span>
+                  {/* Audio Level Bar */}
+                  <div className="w-16 h-2 bg-white/30 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-white transition-all duration-100"
+                      style={{ width: `${audioLevel}%` }}
+                    />
+                  </div>
                 </div>
               )}
             </div>
