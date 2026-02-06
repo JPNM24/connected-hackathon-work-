@@ -1,10 +1,12 @@
 import { useState, useEffect, useRef, useContext, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useVoice } from '@/hooks/useVoice';
+import { useNonVerbal } from '@/hooks/useNonVerbal';
+import type { NonVerbalScores } from '@/hooks/useNonVerbal';
 import {
   Sparkles, Mic, MicOff, Video, VideoOff, PhoneOff, SkipForward,
   Clock, Volume2, AlertCircle, ChevronLeft, Pause, Play,
-  Moon, Sun
+  Moon, Sun, Eye, User, Activity
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
@@ -75,6 +77,43 @@ function VoiceStats({ pace, clarity, confidence }: { pace: number; clarity: numb
   );
 }
 
+// Non-Verbal Stats Component
+function NonVerbalStats({ scores }: { scores: NonVerbalScores }) {
+  const formatScore = (score: number | null) => score !== null ? Math.round(score) : '--';
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between p-3 bg-muted rounded-lg">
+        <div className="flex items-center gap-2">
+          <Eye className="w-4 h-4 text-blue-500" />
+          <span className="text-sm">Eye Contact</span>
+        </div>
+        <span className="font-bold text-blue-500">{formatScore(scores.eye_contact)}%</span>
+      </div>
+      <div className="flex items-center justify-between p-3 bg-muted rounded-lg">
+        <div className="flex items-center gap-2">
+          <User className="w-4 h-4 text-green-500" />
+          <span className="text-sm">Posture</span>
+        </div>
+        <span className="font-bold text-green-500">{formatScore(scores.posture)}%</span>
+      </div>
+      <div className="flex items-center justify-between p-3 bg-muted rounded-lg">
+        <div className="flex items-center gap-2">
+          <Activity className="w-4 h-4 text-purple-500" />
+          <span className="text-sm">Expression</span>
+        </div>
+        <span className="font-bold text-purple-500">{formatScore(scores.facial_expression)}%</span>
+      </div>
+      {scores.final_non_verbal_score !== null && (
+        <div className="flex items-center justify-between p-3 bg-gradient-to-r from-purple-500/20 to-blue-500/20 rounded-lg border border-purple-500/30">
+          <span className="text-sm font-medium">Overall Non-Verbal</span>
+          <span className="font-bold text-lg">{formatScore(scores.final_non_verbal_score)}%</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 
 
 // Main Interview Practice Page
@@ -102,6 +141,15 @@ export function InterviewPractice() {
     setFinalText
   } = useVoice(sessionId, `q${currentQuestion}`);
 
+  // Initialize Non-Verbal hook
+  const {
+    start: startNonVerbal,
+    stop: stopNonVerbal,
+    isAnalyzing: isNonVerbalActive,
+    scores: nonVerbalScores,
+    getAnalysis: getNonVerbalAnalysis
+  } = useNonVerbal(sessionId);
+
   // Sample questions
   const questions = [
     "Tell me about yourself and your background in software development.",
@@ -120,9 +168,10 @@ export function InterviewPractice() {
       streamRef.current = null;
     }
     stopVoice();
+    stopNonVerbal();
   };
 
-  // Initialize camera
+  // Initialize camera and start non-verbal analysis
   useEffect(() => {
     let isMounted = true;
     const initCamera = async () => {
@@ -137,6 +186,12 @@ export function InterviewPractice() {
         streamRef.current = stream;
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
+          // Start non-verbal analysis once video is ready
+          videoRef.current.onloadedmetadata = () => {
+            if (videoRef.current && isMounted) {
+              startNonVerbal(videoRef.current);
+            }
+          };
         }
       } catch (err) {
         console.error('Error accessing camera:', err);
@@ -182,23 +237,71 @@ export function InterviewPractice() {
     }
 
     if (newMicState) {
-      startVoice();
+      // Pass the camera stream to useVoice so it uses the same audio source
+      startVoice(streamRef.current);
     } else {
       stopVoice();
     }
   };
 
+  // Submit answer to backend
+  const submitAnswer = async (transcript: string, questionIdx: number) => {
+    try {
+      await fetch('http://localhost:8000/submit_answer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_id: sessionId,
+          question_id: `q${questionIdx}`,
+          raw_transcript: transcript
+        })
+      });
+    } catch (err) {
+      console.error('Failed to submit answer:', err);
+    }
+  };
+
+  // Analyze full session
+  const analyzeSession = async () => {
+    try {
+      const response = await fetch(`http://localhost:8000/analyze_session/${sessionId}`, {
+        method: 'POST'
+      });
+      const data = await response.json();
+      return data;
+    } catch (err) {
+      console.error('Failed to analyze session:', err);
+      return null;
+    }
+  };
+
   // Next question
-  const nextQuestion = () => {
+  const nextQuestion = async () => {
+    // Submit current answer first
+    if (finalText.trim()) {
+      await submitAnswer(finalText, currentQuestion);
+    }
+
     if (currentQuestion < questions.length - 1) {
       stopVoice(); // Stop current recording
       setCurrentQuestion(currentQuestion + 1);
       setFinalText('');
       setIsMicOn(false);
     } else {
-      // End interview
+      // End interview - analyze and navigate with data
       stopAllMedia();
-      navigate('/results');
+
+      // Get both verbal and non-verbal analysis
+      const verbalAnalysis = await analyzeSession();
+      const nonVerbalAnalysis = await getNonVerbalAnalysis();
+
+      navigate('/results', {
+        state: {
+          verbalAnalysis,
+          nonVerbalAnalysis,
+          sessionId
+        }
+      });
     }
   };
 
@@ -207,9 +310,24 @@ export function InterviewPractice() {
     setShowExitConfirm(true);
   };
 
-  const confirmEnd = () => {
+  const confirmEnd = async () => {
+    // Submit current answer if any
+    if (finalText.trim()) {
+      await submitAnswer(finalText, currentQuestion);
+    }
     stopAllMedia();
-    navigate('/results');
+
+    // Get both verbal and non-verbal analysis
+    const verbalAnalysis = await analyzeSession();
+    const nonVerbalAnalysis = await getNonVerbalAnalysis();
+
+    navigate('/results', {
+      state: {
+        verbalAnalysis,
+        nonVerbalAnalysis,
+        sessionId
+      }
+    });
   };
 
   return (
@@ -273,6 +391,18 @@ export function InterviewPractice() {
 
             {/* Voice Stats */}
             <VoiceStats pace={145} clarity={87} confidence={82} />
+
+            {/* Non-Verbal Stats */}
+            <div className="bg-card rounded-2xl p-4 border border-border">
+              <h3 className="text-sm font-medium text-muted-foreground mb-3">Body Language Analysis</h3>
+              {isNonVerbalActive ? (
+                <NonVerbalStats scores={nonVerbalScores} />
+              ) : (
+                <div className="text-center py-4 text-muted-foreground text-sm">
+                  Waiting for camera...
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Right Side - Question & Transcription */}

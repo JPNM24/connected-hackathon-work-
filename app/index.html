@@ -6,7 +6,25 @@
     <title>InterviewAI - Practice with Confidence</title>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div id="loading-debug" style="padding: 40px; font-family: Arial, sans-serif; text-align: center;">
+        <h2>Loading InterviewAI...</h2>
+        <p>If you see this message for more than 2 seconds, there's a JavaScript error.</p>
+        <p>Open DevTools (F12) → Console to see the error.</p>
+      </div>
+    </div>
+    <script>
+      window.onerror = function(msg, url, line, col, error) {
+        document.getElementById('root').innerHTML = 
+          '<div style="padding: 20px; background: #ffcccc; font-family: monospace;">' +
+          '<h1 style="color: red;">JavaScript Error!</h1>' +
+          '<p><strong>Message:</strong> ' + msg + '</p>' +
+          '<p><strong>File:</strong> ' + url + '</p>' +
+          '<p><strong>Line:</strong> ' + line + '</p>' +
+          '</div>';
+        return false;
+      };
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

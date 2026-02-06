@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Microphone Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 40px;
+            background: #1a1a2e;
+            color: white;
+        }
+
+        h1 {
+            color: #9b59b6;
+        }
+
+        button {
+            font-size: 18px;
+            padding: 15px 30px;
+            margin: 10px;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+
+        #startBtn {
+            background: #27ae60;
+            color: white;
+            border: none;
+        }
+
+        #stopBtn {
+            background: #e74c3c;
+            color: white;
+            border: none;
+        }
+
+        .meter {
+            width: 100%;
+            height: 30px;
+            background: #333;
+            border-radius: 15px;
+            overflow: hidden;
+            margin: 20px 0;
+        }
+
+        .meter-fill {
+            height: 100%;
+            background: linear-gradient(to right, #27ae60, #f1c40f, #e74c3c);
+            width: 0%;
+            transition: width 0.1s;
+        }
+
+        .log {
+            background: #0d0d0d;
+            padding: 15px;
+            border-radius: 8px;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 14px;
+        }
+
+        .log p {
+            margin: 5px 0;
+        }
+
+        .success {
+            color: #27ae60;
+        }
+
+        .error {
+            color: #e74c3c;
+        }
+
+        .info {
+            color: #3498db;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>🎤 Microphone Test</h1>
+    <p>This page tests if your browser can capture audio from your microphone.</p>
+
+    <div>
+        <button id="startBtn" onclick="startTest()">Start Microphone Test</button>
+        <button id="stopBtn" onclick="stopTest()" disabled>Stop Test</button>
+    </div>
+
+    <h3>Audio Level:</h3>
+    <div class="meter">
+        <div class="meter-fill" id="levelMeter"></div>
+    </div>
+    <p id="rmsDisplay">RMS: --</p>
+
+    <h3>Log:</h3>
+    <div class="log" id="log"></div>
+
+    <script>
+        let audioContext = null;
+        let analyser = null;
+        let microphone = null;
+        let stream = null;
+        let animationId = null;
+
+        function log(message, type = 'info') {
+            const logDiv = document.getElementById('log');
+            const p = document.createElement('p');
+            p.className = type;
+            p.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            logDiv.appendChild(p);
+            logDiv.scrollTop = logDiv.scrollHeight;
+            console.log(message);
+        }
+
+        async function startTest() {
+            log('Starting microphone test...', 'info');
+
+            try {
+                // Request microphone access
+                log('Requesting microphone permission...', 'info');
+                stream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true
+                    }
+                });
+                log('Microphone permission granted!', 'success');
+
+                // List audio tracks
+                const tracks = stream.getAudioTracks();
+                log(`Found ${tracks.length} audio track(s)`, 'info');
+                tracks.forEach((track, i) => {
+                    log(`Track ${i}: ${track.label}, enabled: ${track.enabled}, muted: ${track.muted}, readyState: ${track.readyState}`, 'info');
+                });
+
+                // Create audio context and analyser
+                audioContext = new AudioContext();
+                log(`AudioContext sample rate: ${audioContext.sampleRate}Hz`, 'info');
+
+                analyser = audioContext.createAnalyser();
+                analyser.fftSize = 2048;
+
+                microphone = audioContext.createMediaStreamSource(stream);
+                microphone.connect(analyser);
+
+                log('Audio processing started. Speak into your microphone!', 'success');
+
+                document.getElementById('startBtn').disabled = true;
+                document.getElementById('stopBtn').disabled = false;
+
+                // Start monitoring
+                monitorAudio();
+
+            } catch (err) {
+                log(`ERROR: ${err.message}`, 'error');
+                log('Make sure you have allowed microphone access in your browser!', 'error');
+            }
+        }
+
+        function monitorAudio() {
+            const dataArray = new Float32Array(analyser.fftSize);
+            analyser.getFloatTimeDomainData(dataArray);
+
+            // Calculate RMS
+            let sum = 0;
+            for (let i = 0; i < dataArray.length; i++) {
+                sum += dataArray[i] * dataArray[i];
+            }
+            const rms = Math.sqrt(sum / dataArray.length);
+
+            // Update display
+            const levelPercent = Math.min(rms * 500, 100); // Scale for visibility
+            document.getElementById('levelMeter').style.width = levelPercent + '%';
+            document.getElementById('rmsDisplay').textContent = `RMS: ${rms.toFixed(6)} | Level: ${levelPercent.toFixed(1)}%`;
+
+            // Log periodically
+            if (Math.random() < 0.03) { // ~3% chance per frame
+                if (rms > 0.01) {
+                    log(`Audio detected! RMS: ${rms.toFixed(4)}`, 'success');
+                } else if (rms > 0.001) {
+                    log(`Low audio level. RMS: ${rms.toFixed(4)}`, 'info');
+                }
+            }
+
+            animationId = requestAnimationFrame(monitorAudio);
+        }
+
+        function stopTest() {
+            if (animationId) {
+                cancelAnimationFrame(animationId);
+            }
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+            }
+            if (audioContext) {
+                audioContext.close();
+            }
+
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
+            document.getElementById('levelMeter').style.width = '0%';
+
+            log('Test stopped.', 'info');
+        }
+    </script>
+</body>
+
+</html>

@@ -1,4 +1,5 @@
 from fastapi import FastAPI, WebSocket, Request
+from fastapi.middleware.cors import CORSMiddleware
 import tempfile
 import os
 import wave
@@ -7,11 +8,21 @@ from vosk import KaldiRecognizer
 
 main = FastAPI()
 
+# CORS configuration for Vite frontend
+main.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://localhost:5174", "http://127.0.0.1:5173", "http://127.0.0.1:5174"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 sessions = {}
 
 @main.websocket("/ws/voice/{session_id}/{question_id}")
 async def voice_ws(ws: WebSocket, session_id: str, question_id: str):
     await ws.accept()
+    print(f"[WS] Client connected: session={session_id}, question={question_id}")
 
     recognizer = KaldiRecognizer(MODEL, 16000)
     recognizer.SetWords(True)
@@ -22,21 +33,36 @@ async def voice_ws(ws: WebSocket, session_id: str, question_id: str):
         "questions": {}
     })
 
+    chunk_count = 0
+    total_bytes = 0
+
     try:
         while True:
             chunk = await ws.receive_bytes()
+            chunk_count += 1
+            total_bytes += len(chunk)
+            
+            # Debug logging every 10 chunks
+            if chunk_count % 10 == 0:
+                print(f"[WS] Received {chunk_count} chunks, {total_bytes} bytes total, last chunk: {len(chunk)} bytes")
+            
             sessions[session_id]["audio"].append(chunk)
 
             result, is_final = transcribe_stream(chunk, recognizer)
 
-            if is_final and "text" in result:
+            if is_final and "text" in result and result["text"].strip():
+                print(f"[WS] Final transcript: '{result['text']}'")
                 sessions[session_id]["raw_text"].append(result["text"])
                 await ws.send_json({"final": result["text"]})
             else:
-                await ws.send_json({"partial": result.get("partial", "")})
+                partial = result.get("partial", "")
+                if partial:  # Only log and send non-empty partials
+                    print(f"[WS] Partial: '{partial}'")
+                await ws.send_json({"partial": partial})
 
-    except:
-        pass
+    except Exception as e:
+        print(f"[WS] Connection closed: {e}")
+        print(f"[WS] Total received: {chunk_count} chunks, {total_bytes} bytes")
 
 @main.post("/submit_answer")
 async def submit_answer(payload: dict):

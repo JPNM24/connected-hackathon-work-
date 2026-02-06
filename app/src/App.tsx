@@ -46,12 +46,25 @@ function App() {
       document.documentElement.classList.add('dark');
     }
 
+    // Failsafe timeout - if auth takes too long, proceed anyway
+    const timeout = setTimeout(() => {
+      console.warn('[App] Auth check timed out, proceeding without session');
+      setLoading(false);
+    }, 3000);
+
     // Check active sessions and subscribe to auth changes
     import('./lib/supabase').then(({ supabase }) => {
-      supabase.auth.getSession().then(({ data: { session } }) => {
-        setSession(session);
-        setLoading(false);
-      });
+      supabase.auth.getSession()
+        .then(({ data: { session } }) => {
+          clearTimeout(timeout);
+          setSession(session);
+          setLoading(false);
+        })
+        .catch((err) => {
+          console.warn('[App] Failed to get session:', err);
+          clearTimeout(timeout);
+          setLoading(false);
+        });
 
       const {
         data: { subscription },
@@ -61,7 +74,13 @@ function App() {
       });
 
       return () => subscription.unsubscribe();
+    }).catch((err) => {
+      console.error('[App] Failed to load Supabase:', err);
+      clearTimeout(timeout);
+      setLoading(false);
     });
+
+    return () => clearTimeout(timeout);
   }, []);
 
   const toggleTheme = () => {
@@ -112,19 +131,11 @@ function App() {
             />
             <Route
               path="/interview"
-              element={
-                <ProtectedRoute>
-                  <InterviewPractice />
-                </ProtectedRoute>
-              }
+              element={<InterviewPractice />}
             />
             <Route
               path="/results"
-              element={
-                <ProtectedRoute>
-                  <ResultsPage />
-                </ProtectedRoute>
-              }
+              element={<ResultsPage />}
             />
             <Route
               path="/profile"
